@@ -19,11 +19,9 @@ digit_to_string() {
 
 number_to_string() {
   declare number="$1"
-  local string=""
-  local i
+  local i digit string=""
 
   for (( i=0; i<"${#number}"; i++ )); do
-    local digit
     digit="${number:$i:1}"
     [[ $i -ne 0 ]] && string+="-"
     string+="$(digit_to_string "$digit")"
@@ -32,28 +30,24 @@ number_to_string() {
   echo -n "$string"
 }
 
-main() {
-  if [[ ! -f /consul/config/0_swarm.json ]]; then
-    local ip
-    local fourth
-    ip="$(ip address show eth0 | grep 'inet ' | head -n1 | awk '{print $2}' | cut -d/ -f 1)"
-    fourth="$(cut -d. -f 4 <<< "$ip")"
-    local name
-    name="$(number_to_string "$fourth")"
-    cat > /consul/config/0_swarm.json <<EOF
+update_server_config() {
+  local ip fourth name iface="${CONSUL_BIND_INTERFACE:-eth0}"
+
+  ip="$(ip address show "$iface" | grep 'inet ' | head -n1 | awk '{print $2}' | cut -d/ -f 1)"
+  fourth="$(cut -d. -f 4 <<< "$ip")"
+  name="$(number_to_string "$fourth")"
+  cat > /consul/config/0_swarm.json <<EOF
 {
-  "node_name": "$name",
-  "bind_addr": "$ip",
-  "server": true,
-  "bootstrap_expect": 3
+"node_name": "$name",
+"bind_addr": "$ip",
+"server": true,
+"bootstrap_expect": 3
 }
 EOF
-  fi
+}
 
-  rm -f /consul/config/1_join.json
-
-  local othersString
-  local othersCount=0
+update_discovery() {
+  local othersString json othersCount=0 first=1
   declare -a others
 
   while [[ $othersCount -lt 3 ]]; do
@@ -64,20 +58,19 @@ EOF
     othersCount="${#others[@]}"
   done
 
-  local json
   json="{\"retry_join\": ["
-  local first=1
   for addr in "${others[@]}"; do
-   if [[ $first -ne 1 ]]; then
-     json+=","
-   else
-     first=0
-   fi
+   [[ $first -eq 1 ]] && first=0 || json+=","
    json+="\"$addr\""
   done
   json+="]}"
 
   echo "$json" > /consul/config/1_join.json
+}
+
+main() {
+  [[ ! -f /consul/config/0_swarm.json ]] && update_server_config
+  update_discovery
 
   exec docker-entrypoint.sh "$@"
 }
